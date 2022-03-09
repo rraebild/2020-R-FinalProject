@@ -1,0 +1,1460 @@
+---
+title: "Correcting bias in operational expense planning"
+subtitle: 'HarvardX PH125.9x Data Science: Capstone Project'
+author: "edxLux"
+date: "31st January 2022"
+
+output:
+  bookdown::pdf_document2:
+    number_sections: yes
+    toc: yes
+    toc_depth: 3
+    keep_md: true
+    
+  
+
+    
+
+bibliography: references.bib
+---
+
+```{r rSetup, include=FALSE}
+
+# Install and load libraries and global setting ================================
+# that are required to process the files
+
+  # Vector with the library names that areneeded to run the code in this file
+  requiredLibraries <- c( "tidyverse",
+                          "magrittr",
+                          "httr",
+                          "utils",
+                          "readxl",
+                          "tidyxl",
+                          "janitor",
+                          "stringr",
+                          "caret",
+                          "knitr",
+                          "kableExtra")
+  
+  
+  # install and load the libraries if not done so far
+  for(pkg in requiredLibraries){
+    
+    if(!require(pkg, character.only = TRUE)) install.packages(pkg)
+    
+    library(pkg, character.only = TRUE) 
+  }
+  
+  
+  # remove the vectors used during installation
+  rm( requiredLibraries, pkg )
+  
+  # remove the annoying summarise message about groupings :-)
+  options(dplyr.summarise.inform = FALSE)
+  
+  
+# Specific setting for this report =============================================
+  
+  knitr::opts_chunk$set(echo = TRUE)
+  
+  tableFormat <- "pipe" 
+
+
+```
+
+\newpage
+
+# Disclaimer {.unnumbered}
+
+This report has been developed as part of the HarvardX PH125.9x Data Science: Capstone Project. I hereby declare that the report is my own original work and has not been submitted before to any institution for assessment purposes. The copyright and ownership of the original work remains with the author of this report.
+
+\newpage
+
+# Introduction
+
+## Project background and objective
+
+Companies throughout the world require liquidity (i.e. cash) to perform operations and it is usually the task of the Finance department to ensure that sufficient liquidity is available to the company. However, providing liquidity also comes at a cost, as investors will be expecting profits and creditors will ask for interests. Too much liquidity therefore generates unnecessary cost while to little liquidity will inhibit the company's operations.
+
+In order to arrange adequate liquidity instruments, Finance departments therefore require a sufficiently accurate prediction of a company's upcoming spending. Such a prediction usually relies on the resource consumption plan of the company's operational departments.
+
+> "It is difficult to make predictions, especially about the future" [@steincke_1948]
+>
+> "No plan of operations extends with any certainty beyond the first encounter with the main enemy forces" [@moltke_generalstab_1892]
+
+The spending plan of an operational department in turn relies on a great number of assumptions, especially if dealing with topics where there is little previous experience. These uncertainties are then further amplified by disturbances from external influences that are increasing significantly, the farther a spending plan reaches into the future. [@cohn_2012] explains for example that at the beginning of a software development project, the *cone of uncertainty* can reach 1.6 times of the original estimate (see Figure \@ref(fig:ConeOfUncertainty)).
+
+```{r ConeOfUncertainty, echo=FALSE, fig.cap="Cone of Uncertatinty", out.width="300px" , fig.align='center'}
+
+  knitr::include_graphics("ConeOfUncertainty.jpeg")
+```
+
+The author's own experience from controlling software projects also shows that operational managers therefore often chose to err on the *side of caution* and overstate expense plans. On company level, these deviations between operational project planning and actual spending in each project pile up over a fiscal year and create a significant challenge for a Finance department.
+
+However, when looking at operational spending on a company level, it is also the authors experience that there are reappearing patterns:
+
+-   Spendings for external suppliers are often rushed before the end of a fiscal year (when yearly budgets expire)
+-   Internal personal cost tend to decrease after a bonus month, when employees chose to change jobs
+-   Planned spendings in the beginning phases of a project are regularly delayed to later points in time
+-   Project cost seldom ramp down as planned in the final phase of a project
+
+Experienced Finance departments are therefore using judgment and approximations to manually correct the operational expense plans of a company on an aggregated company level.
+
+These **objective of this project** is therefore to develop a machine learning application to **correct, on company level**, **a planning biases in operational expense planning**
+
+## Used Data Set
+
+Obtaining operational expense planning data for research purposes is difficult as such data is often confidential. One notable exception is [@Thiele2021] who provide a real world data set of **eight**[^1] projects **from the Australian construction sector**, which were conducted in the early 2010s.
+
+[^1]: **at the time of writing this paper**
+
+The data set includes a wide range of **data, raging from budgeting, cost and productivity data, scheduling to revenue information**.[^2]
+
+[^2]: The data can be accessed via: [\<https://figshare.com/articles/dataset/Project_Portfolio_Dataset/12998822\>](https://figshare.com/articles/dataset/Project_Portfolio_Dataset/12998822){.uri}.
+
+While the data set is very extensive, it is unfortunately provided in the form of manually prepared Excel files for each project. This means that there are inconsistencies in data formating (e.g. changing variable names) and multiple errors from incorrect formula or cell linkages, which require intensive manual adjustments.
+
+Nevertheless, this is one of the very few - if not the only - publicly available, *real world* data set with an unparalleled depth of operational and financial project management information. The authors of this data set therefore cannot be credited enough!
+
+While the original data is extremely deep, only a small subset will be used in this project:
+
+-   The **estimate data** consists of a bottom-up estimate of resource needs for work packages ("portfolio WBS") in a project. This data forms the overall "performance measurement baseline" of a project. It includes information about the resources name, resource type (e.g. labor or material), resource quantity and measuring unit, cost, etc.
+
+-   The **progress data** consists of monthly project observations on five data points for the above work packages:
+
+    -   planned and actual quantity,
+
+    -   planned and actual cost,
+
+    -   as well as earned value (i.e. the amount of overall planned work that was finished during a certain month)
+
+And even from this subset only an excerpt will be used in this project.
+
+## Project Approach and Key Steps
+
+Based on the above data set, the whole data analysis chain (as taught by HarvardX's Data Science Professional Certificate Program) was performed through the following steps:
+
+1.  The data is imported from the individual Excel files and extensive pre-processing and wrangling is applied to create a homogeneous data set (chapter \@ref(data-import-and-wrangling)).
+2.  Exploratory analysis is then performed to understand the data's structure and to identify potential features that can be used for a machine learning application (chapter \@ref(data-exploration)).
+3.  The data set is then transformed from a *monthly* format to a *standard period* format, in order to make projects with different run times comparable to each other (chapter \@ref(transforming-into-standard-periods)).
+4.  In a a first run of analysis, ten different regression models are then applied to the data (chapter \@ref(first-round-of-modeling)).
+5.  In a second run of analysis, the most promising model from the first run is expanded to an regression tree analysis[^3] (chapter \@ref(second-run)).
+6.  Eventually, the results from both analysis runs are summarised and suggestions for future research is given (chapter \@ref(discussion-and-suggestion-for-future-research)).
+
+[^3]: At least two methods were required by the course instructions
+
+This project itself therefore consists of this project $report$ and an accompanying R source code $script$. The $report$ will outline the key operations of the $script$ and explain the underlying rational.
+
+\newpage
+
+# Data Import and Wrangling
+
+```{r loadTheProjectDataImage, include=FALSE}
+
+  # load the image of the project data that has been prepared by the script
+
+  load( file.path( getwd() , 
+        "projectDataLoaded.RData" ))
+  
+```
+
+## Raw Data
+
+The data set has been saved as a ZIP archive into the author's github repository[^4] to ensure a reproducible $script$ behavior during the grading process.
+
+[^4]: [ProjectData.zip](https://github.com/rraebild/2020-R-FinalProject/raw/main/DataPreperation/Inputs/ProjectData.zip) in the repoistory <https://github.com/rraebild/2020-R-FinalProject>
+
+As a first step, the project's $script$ therefore creates a new directory $DataPreperation$ within the user's current work directory and then downloads and extracts the raw data files from this archive into this directory.[^5]
+
+[^5]: The data set is also provided as a project submission, so it the download fails, the ZIP file can also be manually copied to the $DataPreperation$ directory.
+
+This raw data consists of the multiple Excel files for each project that has been analyzed by [@Thiele2021]. However, for this analysis, only those files are relevant that contain the *estimation* and *progress* data. Therefore the $script$ creates an overview of the available projects and the respective Excel files within the raw data (see Table \@ref(tab:projectList)):
+
+```{r projectList, echo=FALSE}
+
+  
+
+   projects %>% 
+     select( projectNumber, projectName, fileName, fileType) %>% 
+     arrange( projectNumber) %>% 
+     knitr::kable( tableFormat , caption = "List of Projects")
+   
+
+```
+
+## Estimation Data Import {#EstimationData}
+
+Each Excel file contains a sheet called "Estimate" which holds the effort estimation of the project. These estimates are broken down into work packages, called $portfolioWbs$. Table \@ref(tab:portfolioWbsExample) shows an excerpt of some of the estimation data that is stored per $portfolioWbs$:
+
+```{r portfolioWbsExample, echo=FALSE}
+
+projects %>% 
+  unnest( estimate ) %>% 
+  filter(   projectNumber == 1 
+          & portfolioWbs %in% c(907,11, 41)) %>% 
+  select( portfolioWbs, resourceName, resourceUnit, resourceType, resourceQuantity, cost) %>% 
+  arrange( portfolioWbs ) %>%
+  knitr::kable( tableFormat , caption = "Excerpt of estimations for project \"Airport Carpark\"", digits = 2, format.args = list( big.mark = ","))
+
+```
+
+Due to [@Thiele2021]'s manual processing of the data in Excel, there are unfortunately numerous inconsistencies within the data. For example:
+
+-   In project number one's estimation sheet, there is no $portfolioWbs$ number 15. However, in other parts of the same Excel, there is data referencing to such a work package.
+
+-   The estimation sheet also tries to summarize the the $portfolioWbs$ packages into higher level $wbs$ packages, which are apparently used for commercial negotiation and financial settlement with the customer. However, the summaries are within the same columns than the original data and the structuring is achieved by using **color coding** of cells and other ambiguous elements, which has made it quite challenging to identify whether a specific row is summary data or original data.
+
+-   In Project Number 18 there is also an additional level used to sum up the cost estimates for certain streets, e.g. for "Fabris Road", "Harvey Road" or "Ann Street". These summary levels also had to be distinguished.
+
+The $script$ therefore imports and cleans up a wide variety of data points from the Excel files and also applies a consistent variable naming scheme. However, from these data points, only the following variables are relevant for the current analysis:
+
+-   $portfolioWbs$ is a string and identifies a specific work package within a project
+
+-   $resourceType$ is a character value and classifies the used resources within in a work packages. It can be of the following types:
+
+    -   $L$ = Labour
+
+    -   $P$ = Plant
+
+    -   $M$ = Material
+
+    -   $S$ = Subcontract
+
+-   $cost$ is floating point value and refers to the resource cost in Australian Dollar
+
+Table \@ref(tab:overviewAvailbeEstiamtes) gives an summary of the available estimation data after cleansing[^6]:
+
+[^6]: The specific cleansing activities for effort data are omitted for brevity. Please refer to the $script$ for annotated details
+
+```{r overviewAvailbeEstiamtes, echo=FALSE}
+
+  projects %>% 
+    unnest( estimate ) %>% 
+    group_by( projectNumber, projectName, portfolioWbs ) %>% 
+    summarise( numberOfItemEstimates = n() ) %>% 
+    ungroup( portfolioWbs ) %>% 
+    summarise( numberOfWorkPackages = n(),
+              numberOfItemEstimates = sum( numberOfItemEstimates)) %>% 
+    knitr::kable( tableFormat , caption = "Summary of estimation data ")
+  
+  
+```
+
+## Progress Data Import {#ProgressData}
+
+Another sheet within each Excel file is called "Portfolio WBS" and contains progress data throughout the projects duration. After cleansing[^7], it provides the following information for each project month:
+
+[^7]: The specific cleansing activities for progress data are omitted for brevity. Please refer to the $script$ for annotated details.
+
+```{r projectFourProgressData, echo=FALSE}
+
+   projects %>% 
+     filter( projectNumber == 4 ) %>% 
+     unnest( progress ) %>% 
+     select( portfolioWbs, description, ends_with(".1") ) %>% 
+     knitr::kable( tableFormat , caption = "Excerpt of Progress Data for Project Number 4", digits = 2, format.args = list( big.mark = ","))
+
+```
+
+-   $portfolioWbs$ is a string and refers to the identifier of specific work package (see chapter \@ref(EstimationData))
+
+-   $description$ is a string and refers to the name of a specific work package
+
+-   $pq$ is a floating point value and refers to the *planned quantity*
+
+-   $pv$ is a floating point value and refers to the *planned value* (i.e. "planned cost")
+
+-   $aq$ is a floating point value and refers to the *actual* (consumed) *quantity*
+
+-   $ac$ is a floating point value and refers to the *actual* (consumed) *cost*
+
+-   $ev$ is a floating point value and refers to the *earned value*, which is the part of the planned work that was actually finished during a project month.
+
+The values $pq$, $pv$, $aq$, $ac$ and $ev$ are maintained cumulatively for each month, so the value for each month also contains a summary of the values from previous month, as table \@ref(tab:project4CumPlannedValues) illustrates:
+
+```{r project4CumPlannedValues, echo=FALSE}
+
+projects %>% 
+  filter( projectNumber == 4 ) %>% 
+  unnest( progress ) %>% 
+  select( portfolioWbs, description, contains("pv.") ) %>% 
+  filter( portfolioWbs == 68) %>% 
+  group_by( portfolioWbs ) %>% 
+  rowwise() %>% 
+  
+  summarise( across ( .cols = contains("."),
+                      .fns = ~ sum(.x, na.rm = TRUE)),
+             
+             across( last_col(),
+                     .names = "lastVal"),
+             
+             across ( .cols = contains("."),
+                      .fns = ~ { sum(.x, na.rm = TRUE) / lastVal },
+                      .names = "%_{.col}")) %>% 
+  
+  select( -lastVal) %>% 
+  pivot_longer( cols = contains(".")) %>% 
+  separate( name, sep = "\\.", into = c("type","month")) %>% 
+  pivot_wider( names_from = "month",
+               values_from = "value") %>% 
+  
+  knitr::kable( tableFormat , caption = "Illustration of cummulative data structure", 
+                digits = 2, format.args = list( big.mark = ","))
+
+
+
+
+```
+
+A challenge again is that the raw data is not consistently structured, e.g. the various Excel files differ in the number, naming and ordering of their columns. Details for amending these inconsistencies can be found in the $script$.
+
+As a last step, the progress data is then transformed from wide data to a tidy long data structure and added to the data set under the new variable $periodProgress$. The first 10 rows of this variable are shown below:
+
+```{r periodProgress, echo=FALSE}
+
+ projects %>% 
+   select( periodProgress ) %>% 
+   unnest( periodProgress ) %>% 
+   slice_head( n = 10) %>% 
+   kable( tableFormat , caption = "First 10 rows of the variable \"periodProgress\"", 
+          digits = 2, format.args = list( big.mark = ","))
+
+```
+
+## Cleansed Dataset
+
+The final, cleansed data is stored in the tibble $projects$ and has the following structure:
+
+```{r cleansedData, echo=FALSE, fig.cap="Structure of \"projects\""}
+
+ projects
+
+```
+
+-   $projectNumber$, $projectName$, $fileName$ and $fileType$ are normal columns that contain integer or string values
+-   $periodProgress$, $estimate$ and $progress$ are *list-columns* where into each row a tibble with the respective project information is nested. The structure of these nested tibbles is homogeneous within each column
+
+The cleansed, raw data set is now ready for various analyses.
+
+## Base Data Set
+
+After the raw data has been cleansed, the *base data set* for the analysis is selected, which is an excerpt of the raw data.
+
+This is archived via the new function $baseSet$, which extracts the *actual cost* ($ac$) and the *planned values* ($pv$) for each project from $periodProgress$. Other raw data is omitted. The function also removes rows which contain $NA$ values to ease the analysis. If required, the function can optionally also add a row index before $NA$ values are omitted (to allow a reconstruction of the full base data set).
+
+```{r baseDataSet}
+
+  ## function to define the base data set
+  baseSet <- function( .removeNAs = TRUE , .baseIndex = FALSE , 
+                       .includeValueTypes = c( "ac", "pv" ) ) {
+    
+    # start with the full project data set
+    projects %>% 
+    
+      # omit project data that is not relevant for this analysis
+      select( projectNumber, projectName, periodProgress ) %>% 
+      
+      # unnest the progress data to have a tidy, long table with all observations
+      unnest( periodProgress ) %>% 
+        
+      # filter for the periodValues that are part of this analysis
+      filter( valueType %in% .includeValueTypes ) %>% 
+      
+      # if an index shall be added, e.g. in order to restore to original values
+      { if (.baseIndex) rownames_to_column( . , var = "baseIndex" ) else . } %>% 
+      
+      # remove NA entries if necessary
+      { if (.removeNAs) na.omit(.) else . } 
+
+  }
+
+```
+
+A random sample of 20 observations from the $baseDataSet$ is shown below:
+
+```{r sampleObservations, echo=FALSE}
+
+   set.seed(10)
+   baseSet() %>% 
+     slice_sample( n = 20) %>% 
+     arrange( projectNumber ) %>% 
+     kable( tableFormat , caption = "Sample from Base Data Set", 
+            digits = 2, format.args = list( big.mark = ","))
+   
+```
+
+\newpage
+
+# Data exploration
+
+## Company Level Expenses
+
+Figure \@ref(fig:companyLevelExpenses) plots a comparison of the aggregated planned versus the aggregated actual project expanses of the company over time[^8].
+
+[^8]: For simplification it is assumed that each project starts at the same period (i.e. month).
+
+```{r companyLevelExpenses, echo=FALSE, fig.cap="Planned and Actual Company Level Expanses"}
+
+  baseSet() %>% 
+    group_by( period, valueType ) %>%
+    summarise( periodValue = sum( periodValue, na.rm = TRUE)) %>% 
+    ggplot( aes(x=period, y=periodValue, color=valueType)) +
+      geom_line() +
+      scale_y_continuous( labels= ~ sprintf("%.2f Mio", .x/10^6)) 
+
+```
+
+This reveals that there is a significant mismatch between what the company **plans** to pay out (e.g. to employees, suppliers and for material) and what it **actually** pays out. As explained in chapter \@ref(introduction) this leads to unnecessary additional expanses, as the unused capital needs to be financed.
+
+Assuming a cost of capital of 4% per year, this would for example create additional cost of 6,976.34 in period six:
+
+```{r coCPeriodSix, echo=TRUE, fig.cap="Cost of Captial in Period Number Six"}
+
+ baseSet() %>% 
+   pivot_wider( names_from = "valueType", values_from = "periodValue") %>% 
+   mutate ( unusedCapital = pv - ac) %>% 
+   group_by( period ) %>% 
+   summarise( unusedCaptial = sum( unusedCapital, na.rm = TRUE) ) %>% 
+   filter( period == 6) %$%
+   unusedCaptial * (0.04 /12)
+
+```
+
+## Project Level Expanses
+
+Breaking down the planned and actual expenses to project level reveals a similar deviation between planned and actual expenses across most projects. However, it appears that the deviations seem be larger during quarter two and three of a project.
+
+```{r projectLevelExpanses, echo=FALSE, fig.cap="Project Level Expenses"}
+
+  baseSet() %>% 
+    group_by( projectName, period, valueType ) %>%
+    summarise( periodValue = sum( periodValue, na.rm = TRUE)) %>% 
+    ggplot( aes(x=period, y=periodValue, color=valueType)) +
+      geom_line() +
+      scale_y_continuous( labels= ~ sprintf("%.2f Mio", .x/10^6)) +
+      facet_wrap ( projectName ~ ., scales = "free" )
+
+```
+
+The idea of this project is therefore to use machine learning approaches to reveal and formalize these patterns, which would allow the finance department to introduce a bias correction between planned and actual expenses in order to reduce the financing cost of the company.
+
+## Work Package Level Expenses
+
+At the time of writing this paper, [@Thiele2021] provide data for only eight projects. As a rule of thumb (for example in regression analysis) there should be at least 10 observations per potential variable. Therefore, the data set is too small on project level to create stable estimates.
+
+However, the data in the base set is provided for each project on work package level ($portfolioWbs$). An illustrative sample from project number 1 shows in figure \@ref(fig:portfolioWbsExpenses) that there seem to be similar patterns present on this level.
+
+In total, there are 351 work packages in the base data set, so the expectation is that this is a sufficient number of observations to create a stable estimate.
+
+```{r portfolioWbsExpenses, echo=FALSE, fig.cap="Expenses for a sample of Work Packages from Project Number 1"}
+
+  baseSet() %>% 
+    filter( projectNumber == 1) %>% 
+    group_by( portfolioWbs, period, valueType ) %>%
+    summarise( periodValue = sum( periodValue, na.rm = TRUE)) %>%   
+    filter( portfolioWbs %in% c(11, 13, 62, 95, 131, 141,73, 902, "CSA", "SWP", "QMR", "WW")) %>% 
+    ggplot( aes(x=period, y=periodValue, color=valueType)) +
+      geom_line() +
+      scale_y_continuous( labels= ~ sprintf("%.2f Mio", .x/10^6)) +
+      facet_wrap ( portfolioWbs ~ ., scales = "free" )
+
+
+```
+
+\newpage
+
+# Modeling of the Bias Correction
+
+## Preparation
+
+### Training and Test Set
+
+According to the machine learning principles taught by [@Irizarry2022], the base data set is first to be divided into a *training set* and a *test set* and the suggested split of 80/20 is used here.
+
+```{r testAndTrainingSet, include=FALSE, echo=TRUE, include=TRUE, fig.cap="Seperation of Test and Training Set"}
+
+    # set the seed to create reproducible partitions
+    set.seed(20)
+    
+    # central definition of the base data set
+    baseSet() %T>%
+      
+      # create training index (within the global environment)
+      { trainIndex <<- createDataPartition( y = .$periodValue, 
+                                            times = 1, 
+                                            p = 0.8, 
+                                            list = FALSE)} %>% 
+        
+      # create a list with training and testing data sets (in global environment)
+      { dataSet <<- list ( training = .[ trainIndex , ],
+                           testing = .[ -trainIndex , ] )}
+    
+    
+    # nest the progress data to project level
+    for ( i in c(1,2) ) {
+      dataSet[[i]] %<>% 
+        nest( progress = -c(projectNumber, projectName))
+    }
+    
+```
+
+This creates the new list $dataSet$ which contains the two similar structured tibbles $training$ and $testing$[^9]. Each of these subsets is structured in a similar way
+
+[^9]: Structuring the data like this allows for developing general functions that can later be applied to both data sets.
+
+### Transforming into Standard Periods
+
+Each project has a different duration (e.g. project number one lasts 8 periods, project number two lasts 4 periods, while project number six lasts for 14 periods)[^10]. Since the assumption is that the estimation bias somehow varies within the project duration, the approach of this analysis is to standardize the duration of all projects to the same length of 100 $standard Periods$.
+
+[^10]: A *project period* resembles one *calendar month*
+
+This is supposed to allow for the detection of time-based patterns, e.g. if a bias is present for example only during the later phases of a project.
+
+The transformation is archived by first calculating a *stepvalue* ( number of project $periods$ divided by number of $standardPeriods$ ) and then adding a cumulative sum of step values to create a *conversion break value* for each $standardPeriod$. The respectice planned or actual value of a $period$ value is then assigned to the corresponding $standardPeriod$, if the $period$ number is smaller or equal to the *conversion break value* but bigger than the previous *period* number. Figure \@ref(fig:conversionBreaks) shows a simplified example for a project with 4 $period$s and a setting with 10 $standardPeriod$s.
+
+```{r conversionBreaks, echo=FALSE, fig.cap="Conversion Break Values for standardPeriods", out.width="300px" , fig.align='center'}
+
+  knitr::include_graphics("standardPeriodConversion.png")
+```
+
+The mapping of $period$s to $standardPeriod$s is captured in a mapping table and added to the *data set*.
+
+```{r fullDataSetFunction, include=TRUE, echo=FALSE}
+
+  ## function to explore the full dataSet
+  ## not shown in report, to keep things simple
+  fullDataSet <- function ( .dataSet = dataSet ) {
+    
+    a <- .dataSet[["training"]] %>% 
+      add_column( ID = "training")
+    
+    b <- dataSet[["testing"]] %>% 
+      add_column( ID = "testing")
+    
+    bind_rows( a, b ) %>% 
+      return()
+  }
+
+```
+
+```{r transformToStandardPeriods, include=TRUE, echo=TRUE, fig.cap="Mapping Table between Periods and StandardPeriods"}
+
+
+  # maximum number of periods that exist in the dataset
+  maxPeriods <- fullDataSet() %>% 
+    unnest( progress ) %$%
+    max( period )
+  
+  
+  # Number of standardized periods (shall always be bigger than 
+  # normal periods, usually 100)
+  stdPeriodNumber = max( 100,  maxPeriods) 
+  
+  
+  # stepvalue
+  conversionBreak = maxPeriods / stdPeriodNumber
+  
+  # Mapping table between periods and stdPeriods
+  periodMappings <-
+    
+    # create a tibble with a row for each period
+    tibble ( period = 1:maxPeriods) %>% 
+    
+    # find the fraction until which the stdPeriod covers
+    rowwise () %>% 
+    mutate( toBreak = max( seq( from = conversionBreak, 
+                                to = period, 
+                                by = conversionBreak ))) %>% 
+    
+    # find the fraction from which the stdPeriod covers
+    ungroup () %>% 
+    mutate( fromBreak = lag(toBreak, default = 0) + conversionBreak ) %>% 
+    
+    # nest the list of stdPeriod that match do a specific period into a new column
+    rowwise() %>% 
+    mutate( stdPeriod = list( seq( from = fromBreak,
+                                   to = toBreak,
+                                   by = conversionBreak )
+                              / conversionBreak )) %>%
+    
+    # remove the temporary columns 
+    select( -fromBreak, -toBreak) 
+  
+  # add the mapping table to the dataSet
+  dataSet %<>% 
+    c( periodMapping = list( periodMappings ) )
+  
+```
+
+Afterwards, the mapping table is used to transform the progress data to $standardPeriod$s.
+
+```{r include=TRUE, echo=TRUE, fig.cap="Adding the Standard Periods to the progress data"}
+
+  ## transform both training and testing project progress data (list element 1 and 2) 
+  ## to standardized periods 
+  for (i in 1:2 ) {
+
+    # dataSet is changed
+    dataSet[[i]] %<>% 
+      unnest( progress ) %>% 
+      
+      # add the list of stdPeriods to progress data
+      left_join( dataSet$periodMapping, by = "period") %>% 
+      
+      # expand the new rows for stdPeriods (by definition: stdPeriods are 
+      # always more than normal Periods) 
+      unnest(stdPeriod) %>% 
+      
+      # nest back the progress data
+      nest( progress = -any_of( c( "projectNumber", "projectName", "total" )))
+  }
+
+```
+
+### Adding Resource Information
+
+```{r addingResourceInformation, include=TRUE, echo=FALSE}
+
+
+  ## define a function to pull the portfolioWbs elements
+  portfolioWbs <- function ( .projectNumber = NULL, .portfolioWbs = NULL , .onlyUngroupedResources = FALSE ) {
+    
+    # only if debugging the function
+    # .projectNumber <- 1:2
+    # .portfolioWbs <- 11:904
+    # .onlyUngroupedResources <- TRUE
+    
+    projects %>%
+      # Gather the data
+      select ( projectNumber, estimate) %>% 
+      unnest( estimate ) %>%
+      select( -c( isSummary, isSubTotal, originalWbs, lineNo)) %>% 
+      filter( !is.na(portfolioWbs) ) %>% 
+      
+      # filter for project if required
+      { if ( !is.null(.projectNumber)  ) filter( . , projectNumber %in% .projectNumber ) else . } %>% 
+      
+      # filter for portfoliowbs  if required
+      { if ( !is.null(.portfolioWbs)  )  filter( . , portfolioWbs %in% as.character( .portfolioWbs ) ) else . } %>% 
+      
+      # add an index "resourceWeight" for the resources in the WBS,
+      # this tells how much "weight" a particular resource has within the overall cost of the portfolioWBS
+      # e.g. a resource may have 10% of the toal cost of a portfolioWbs
+      group_by(projectNumber, portfolioWbs ) %>% 
+      mutate( resourceWeight = total / sum( total, na.rm = TRUE)) %>% 
+      ungroup() %>% 
+      
+      # summarize to resourceType level
+      group_by( projectNumber, portfolioWbs, resourceType ) %>% 
+      summarise( resourceWeight = sum( resourceWeight, na.rm = TRUE)) %>% 
+      ungroup() %>% 
+      
+      # check in which form the data shall be return
+      { if ( .onlyUngroupedResources == TRUE) {
+        
+        # only return the resource information g
+        select( . ,  -c( projectNumber, portfolioWbs )) } 
+        
+        else {
+        
+        # Nest the data into a tibble with project and portfolioWbs info
+        nest( .,  resources = -c( projectNumber, portfolioWbs))
+        }
+        
+      } %>% 
+      
+      
+      # if nothing can be found (e,g, because the project or portfolioWbs does not exist) then return an NA
+      { if ( nrow(.) == 0 ) { message("No portfolioWbs available for this selection")
+                              NA } 
+        else .                                               #the previous data
+        
+      } %>% 
+      
+      return()
+  }
+  
+
+  ## add resource information to the dataset
+  for (i in 1:2 ) {
+
+    # change the  progress data in the data set
+    dataSet[[i]] %<>% 
+      unnest( progress ) %>% 
+      
+      # add the resource information 
+      left_join( portfolioWbs(), by = c("projectNumber", "portfolioWbs") ) %>%
+      
+      # robust way of applying a group on all existing columns except the resource column (i.e. one observation) 
+      # then unnest the resource column into these groups 
+      group_by(  select(., -resources) ) %>%
+      unnest( resources, keep_empty = TRUE ) %>% 
+    
+      # add grouping level 2 which are the different resource types 
+      # and calculate the weight of each resource type within one observation
+      group_by( resourceType, .add = TRUE ) %>% 
+        summarise( weight = sum( resourceWeight, na.rm = TRUE) ) %>% 
+      
+      # back to grouping level 1 (the observation)
+      # create separate variables for each resource type
+      pivot_wider( names_from = resourceType,
+                   names_prefix = "weight",
+                   values_from = weight,
+                   values_fill = 0) %>% 
+      
+      # add another variable for the case that no resources were estimated for this observation
+      select( -any_of("weightNA")) %>% 
+      mutate( weightNoResource = ifelse( round( sum( weightM,
+                                                     weightS,
+                                                     weightL,
+                                                     weightP), 0) == 1,
+                                         0,1))  %>%
+      
+      # result as clean, nested tibble
+      ungroup() %>% 
+      
+      # nest the table back to its original format
+      nest( progress = -any_of( c( "projectNumber", "projectName", "total" )))
+  }
+
+
+```
+
+Besides the elapsed project time, an additional source of explanation for the bias might be the *Mix of Resources* in each work package. In order to utilize this information, first a function $portfolioWbs$ is defined that can pull the resource information for a specific work package and then calculate the respective share of resources types. E.g. for a work package number 41 of project 1 the resource mix is like this (L=Labor, M=Material, P=Production, S=Supplier).
+
+```{r resourceMixP1WP41, include=TRUE, echo=TRUE, fig.cap="Resourcetype Mix in Workpackage 41 of Project 1"}
+
+ portfolioWbs( .projectNumber = 1, .portfolioWbs = 41) %>% 
+   unnest( resources )
+
+```
+
+This information is then added to the $dataSet$.
+
+An example for a complete set observations therefore looks like this:
+
+```{r exampleObservation, echo=FALSE, include=TRUE }
+
+ dataSet[["training"]][["progress"]][[1]] %>% 
+   filter( portfolioWbs == 41, stdPeriod==30) %>% 
+   select( -portfolioWbs, -period, -stdPeriod) %>% 
+   knitr::kable( tableFormat , caption = "Observation set from Training Data in Project Number 1 in Standard Period 10", 
+                 digits = 2, format.args = list( big.mark = ","))
+
+```
+
+## First Round of Modeling
+
+### Models
+
+```{r Models, include=TRUE, echo=FALSE}
+
+  ## Set up the models
+  {
+    modelComparison <- 
+      
+      # define the parameters of each model
+      tribble( 
+        
+        ~modelName,            ~batch,  ~modelmethod,  ~formula,
+        
+        "just use plan value", "A",     "",            "",
+        
+        "autogenerate",        "B",     "glm",         "value.ac ~ value.pv",
+        "autogenerate",        "B",     "glm",         "value.ac ~ value.pv + weightM",
+        "autogenerate",        "B",     "glm",         "value.ac ~ value.pv + weightS",
+        "autogenerate",        "B",     "glm",         "value.ac ~ value.pv + weightL",
+        "autogenerate",        "B",     "glm",         "value.ac ~ value.pv + weightP",
+        "autogenerate",        "B",     "glm",         "value.ac ~ value.pv + stdPeriod",
+        "autogenerate",        "B",     "glm",         "value.ac ~ value.pv + weightNoResource",
+        
+        "autogenerate",        "B",     "glm",         "value.ac ~ value.pv + weightM + weightS + weightL + weightP",
+        "autogenerate",        "B",     "glm",         "value.ac ~ value.pv + weightM + weightS + weightL + weightP + weightNoResource"
+        
+      ) %>% 
+      
+      # Autogenerate names for some models by combining the method and the factors
+      mutate( across( modelName, 
+                      ~ ifelse( modelName == "autogenerate", 
+                                paste0( modelmethod, " with ", formula ),
+                                modelName ))) %>% 
+            
+      # Add a model ID 
+      rowid_to_column( var = "modelId" )
+  }
+
+```
+
+In the first round of modeling, there are 10 models to be trained. Model number 1 is the most simple one, as it just uses the planned value to forecast the actual value. Model number 2 to 10 are using *Generalized Linear Regression* (glm) with different predictor variables. E.g. model 3 uses two variables: the *planned value* and the *share of the resource type material* within a work package.
+
+```{r overviewOfModels, include=TRUE, echo=FALSE}
+
+ modelComparison %>% 
+   select( -batch, -modelmethod, -formula) %>% 
+   knitr::kable( tableFormat , caption = "Models to be trained")
+
+```
+
+### Training and Prediction
+
+```{r trainAndPrediction, include=TRUE, echo=FALSE}
+
+   ## function to train a model
+  training <- function ( .dataset = dataSet$training,
+                         .modelNo = 1, 
+                         .trainControl = trainControl( method="none" )) {
+  
+    
+    # only for debugging
+    # .dataset <- dataSet$training
+    # .modelNo <- 2
+    # .trainControl <- trainControl( method="none" )
+
+    
+    # pull the batch that belongs to the current model    
+    batch <- modelComparison[ .modelNo , ]$batch 
+    
+    
+    # Chose which batch shall be processed
+    switch( batch,
+            
+            
+            # model based on the planned value
+            "A" = {
+              
+              # end the function
+              return( list( model = "Just use the plan values as forecast" ))
+
+            },
+            
+            
+            # models that are using a simple train function (multiple formulas can use this code)
+            "B" = {
+              
+              
+              # getting the method that shall be used
+              method <- modelComparison[ .modelNo , ]$modelmethod
+              
+              
+              # getting the formula that shall be used
+              formula <- as.formula( modelComparison[ .modelNo , ]$formula ) 
+              
+              
+              # turning the data set into wide format and add a row index
+              .dataset %<>%
+                select( projectNumber, projectName, progress) %>%
+                unnest( progress ) %>%
+                select( - any_of( "relPeriodValue" )) %>%                 # remove to omit sideeffects (was added to the code)
+                pivot_wider( names_from = valueType,
+                             names_prefix = "value.",
+                             values_from = periodValue) %>%
+                rowid_to_column( var = "rowindex" )
+              
+              
+              # create a forecast set by removing NAs from the input dataset
+              forecastset <- .dataset %>% 
+                na.omit()
+              
+              
+              # train the model
+              model <- train( form = formula,
+                              data = forecastset,
+                              method= method,
+                              trControl = .trainControl )
+              
+              
+              # end the function
+              return( list( model = model))
+
+            }
+            
+    )
+  }
+  
+
+  ## Function to predict values from a dataset and a model
+  prediction <- function( .dataSet = NULL, .model = NULL ) {
+    
+    # only for debugging
+    # .model <- training( .modelNo = 9 )$model
+    # .dataSet <- dataSet$training
+    
+    
+    # pull the supplied dataset
+    stdPeriodPrediction <- .dataSet %>% 
+      select( projectNumber, projectName, progress) %>% 
+      unnest( progress ) 
+    
+    
+    # forecasting values -------------------------------------------------------
+    
+    
+    # For the simple plan value model no 1
+    if (.model[1] == "Just use the plan values as forecast") {
+
+      
+      # use the supplied data and copy plan to forecast
+      stdPeriodPrediction %<>% 
+        pivot_wider( names_from = valueType,
+                     names_prefix = "value.",
+                     values_from = periodValue) %>% 
+        mutate( value.fc = value.pv ) 
+      
+    # for all other models  
+    } else {
+      
+      # preserve the original data Set and turn it into wide format and add a row index
+      originalDataSet <-
+        
+        # start with the supplied original data set and unnest the progress column
+        .dataSet %>%
+        select( projectNumber, projectName, progress) %>% 
+        unnest( progress ) %>%
+        select( - any_of( "relPeriodValue" )) %>%                   # omit to prevent side-effects (this item was added to the code later)
+        
+        # turn into wide format
+        pivot_wider( names_from = valueType,
+                     names_prefix = "value.",
+                     values_from = periodValue) %>%
+        
+        # add a row index
+        rowid_to_column( var = "rowindex" )
+      
+      
+      # create a forecastset by removing NAs from the original dataset
+      forecastset <- originalDataSet %>% 
+        na.omit()
+      
+      
+      # create a tibble with the predicted forcast values and the original rowids  
+      forecast <- tibble ( rowindex = forecastset$rowindex,
+                           value.fc = unlist( predict( .model,
+                                                       forecastset )))
+      
+      # create stdPeriodPredictions 
+      stdPeriodPrediction <- 
+        
+        # start with the supplied dataset
+        originalDataSet %>% 
+        
+        # add the available predictions (note: some entries don't have a forecast, because e.g. the pv is NA)
+        left_join( forecast, by = "rowindex" ) %>% 
+        
+        # remove rowindex
+        select( -rowindex ) 
+        
+    }
+    
+    return( stdPeriodPrediction = stdPeriodPrediction) 
+  }
+
+
+```
+
+There are two different functions implemented to start the modeling:
+
+-   The function $training$ accepts a *data set* (i.e. either the *training* or the *testing* data) along with the *model number.* Based on this, it returns a *trained model*:
+
+    ```{r training, include=TRUE, echo=TRUE, fig.cap="Model 2 based on the Training Set"}
+
+      model <- training( .dataset = dataSet$training, 
+                         .modelNo = 9 )
+
+    ```
+
+    ```{r trainingResult, include=TRUE, echo=FALSE}
+
+      model
+
+    ```
+
+-   The function $prediction$ accepts a (new) *data set* along with a *trained model* and returns a *prediction*, i.e. a *set of forecasted cost values* that correspond to the supplied input data.
+
+    ```{r prediction, include=TRUE, echo=TRUE}
+
+      forecast <- prediction( .dataSet = dataSet$testing, 
+                              .model = model ) 
+     
+    ```
+
+    ```{r predictionTabl, include=TRUE, echo=FALSE}
+
+      forecast %>%
+         # selected a sample of rows and columns from forecast
+         slice( c(10, 1000, 6000, 12000, 14000, 15000, 20000, 20500) ) %>% 
+         select( -c(projectName, description, period, weightNoResource, value.ac)) %>% 
+         
+         # show sample as table
+         knitr::kable( tableFormat , caption = "Samples rows and columns from forecasted values", 
+                       digits = 2, format.args = list( big.mark = ","))
+     
+
+    ```
+
+## Loss and Evaluation
+
+### Loss
+
+[@Irizarry2022] describes the *Loss function* as a metric to determine the "best" approach among several alternatives in Machine Learning. Very often the concept of *Root Mean Squared Error* (RMSE) is used for this.
+
+However, in this analysis, we are choosing a variant of the Mean Absolute Error (MAE) as decisive metric. The reason for this is that it fits very elegantly with the problem description of minimizing the impact from deviations between the planned and actual company expenses:
+
+-   If the delta between the forecasted and the actual cost in a certain $Period$ is smaller or equal to zero, then we are experiencing a project cost *overrun*. In this case the delta is multiplied with an $OverrunPenalty$ (e.g. the interest rate for a short-term loan)
+
+-   If the delta between the forecasted and the actual cost in a certain $Period$ is bigger than zero, then we are experiencing a project cost *underrun*. In this case the delta is multiplied with an $UnderRunPenalty$ (e.g. the interest rate for the now unused long-term loan)
+
+-   However, since this penalty only happens on company level, we want to sum up all the deltas from all work package within a certain period and we specifically want positive and negative deltas within a period to cancel each other out (i.e. if the overrun from one work package is compensated by underrun of another work package, then there are no losses for the company)
+
+Figure \@ref(fig:LOSS) shows this principle as a mathematical formula. To keep things simple, both the $OverRunPenalty$ and the $UnderRunPenalty$ are set to 0.05 for the first round of analysis.
+
+```{r LOSS, echo=FALSE, fig.cap="Loss function", out.width="300px" , fig.align='center'}
+
+  knitr::include_graphics("LOSSFunction.png")
+
+```
+
+### Evaluation
+
+```{r evaluation, include=TRUE, echo=FALSE}
+
+  ## Function to evaluate a model with a dataSet
+  evaluation <- function( .prediction = NULL,
+                          .overrunPenatly = 0.05, .underrunePenalty = 0.05,
+                          .plotSubtitleText = NULL,
+                          .noLinePlot = FALSE) {
+    
+    
+    # only for debugging (to generate test values)
+    # .prediction <-   prediction( .model = training( .model=2,
+    #                                                 .dataset = dataSet$training)$model,
+    #                              .dataSet = dataSet$training)
+    # .overrunPenatly <- 0.04
+    # .underrunePenalty <- 0.04
+    # .plotSubtitleText <- NULL
+    
+
+    # transform standardPeriods to normal Periods ------------------------------
+    predictionPeriods <- 
+      
+      # start from  the prediction per stdPeriod that were supplied as input 
+      .prediction %>%   
+      
+      # group the data into (normal) periods  (i.e. one group is one normal period ) 
+      group_by( select( . , - starts_with("value."),
+                        - stdPeriod) ) %>% 
+      
+      # generate the normal period values (since all data is cummultive, it is just the maximum value from the standard period)
+      summarise( stdPeriod = list( stdPeriod ),
+                 across( .cols =  starts_with("value."),
+                         .fns = ~ max( .x ) )) %>% 
+      ungroup()
+    
+    
+    # caluclate the prediction on company level incl. penalties ----------------
+    predictionCompany <-
+      
+      # start with predictions per period
+      predictionPeriods %>%
+      
+      # aggregate to periods on company level
+      group_by( period, stdPeriod ) %>%
+      summarize( across( .cols =  starts_with("value."),
+                         .fns = ~ sum( .x , na.rm = TRUE ))) %>% 
+      ungroup() %>% 
+      
+      # Calculate the delta between forecast and actual and then calculate the corresponding penalty
+      mutate(
+        # the delta between forecast and actual in a period
+        value.delta = value.fc - value.ac,
+        
+        # the penalty that applies in this specific period
+        value.periodSpecificPenalty = 
+          case_when( value.delta > 0      ~ abs(value.delta) * .underrunePenalty,
+                     value.delta < 0      ~ abs(value.delta) * .overrunPenatly,
+                     TRUE                 ~ 0  ),   # all other cases, e.g. if NA or 0
+        
+        # the cumulative penalties up to this period (remember: all values in the data set are cummulative)
+        value.penalty = cumsum( value.periodSpecificPenalty )) %>%
+      
+      # bring the data back to a tidy format
+      pivot_longer( cols = starts_with("value."),
+                    names_to = "valueType",
+                    names_transform = ~ str_sub( string = .x,
+                                                 start = 7),
+                    values_to = "periodValue")
+    
+    
+    # calculate the LOSS of the model ------------------------------------------
+    modelLoss <- 
+      
+      # start with company predictions
+      predictionCompany %>%
+      
+      # filter for the last period
+      filter( period == max( period, na.rm = TRUE)) %>% 
+      
+      # grab the penalties
+      filter( valueType == "penalty") %$%
+      periodValue
+    
+    
+      # end the function and return only LOSS if no lineplot is required
+    
+    # create a lineplot on company level ---------------------------------------
+    # if it has not been deselected during the function call
+    if ( .noLinePlot == FALSE ) { 
+      
+      companyPlot <- 
+        
+        # start with the prediction on company level
+        predictionCompany %>% 
+        
+        # select the valueTypes that shall be plotted %>% 
+        filter( valueType %in% c("ac","fc","penalty")) %>% 
+        #filter( valueType %in% c("ac","fc")) %>% 
+        
+        # draw the plot
+        ggplot( aes( x=period, y=periodValue, color= valueType) ) +
+        geom_line() +
+        scale_y_continuous( labels= ~ sprintf("%.2f Mio", .x/10^6)) +
+        labs( 
+          title = paste0( "Company Expenses with a LOSS of: ", format( round( modelLoss, 2),
+                                                                       big.mark = ",",
+                                                                       nsmall = 2,
+                                                                       scientific = FALSE )),
+          subtitle = if (is.null(.plotSubtitleText)) { waiver() } else .plotSubtitleText, 
+          caption = "(c) edxLux 2022" )
+      
+      # if no company lineplot is required
+    } else { companyPlot <- NULL }
+      
+    
+    # return values ------------------------------------------------------------ 
+    return( list( predictions = predictionPeriods,
+                  companyPlot = companyPlot,
+                  loss = modelLoss ))
+    
+  }
+
+```
+
+The function $evaluation$ implements the *loss* calculation. It accepts a $prediction$ object (i.e. a set of forecasted and actual values for a range of periods) along with a settings for the $OverRunPenalty$ and the $UnderRunPenalty$ (the default value for both is 0.05). The function returns a list with three objects: (a) a tibble with the predictions, (b) a *ggplot object* that plots the forecasted values against the actual values, and (c) the calcualted *loss*.
+
+```{r evaluationResult, include=TRUE, echo=TRUE }
+
+  evaluation( .prediction = forecast,
+              .overrunPenatly = 0.05, 
+              .underrunePenalty = 0.05 )
+
+```
+
+### Results from First Run of Modeling
+
+Based on the preparations mentioned above, a first run of modeling is applied:
+
+```{r FirstRun, echo=TRUE, fig.cap="The First Modeling Run", include=TRUE, results='hide'}
+
+    # Function that goes through all the modeling steps for a specific model and returns the loss
+    modelingLoss <- function ( currentModel ) {
+      
+      model <- training( .dataset = dataSet$training,
+                         .modelNo = currentModel) 
+      
+      forecast <- prediction( .model = model,
+                              .dataSet = dataSet$testing )
+      
+      evaluation( forecast ) %>% 
+        pluck(3) %>% 
+        return()
+    }
+  
+  
+    # add a column with the first run results to the modelComparison
+    modelComparison %<>% 
+      mutate( firstRunLOSS = map_dbl( modelComparison$modelId,
+                                      ~ modelingLoss( .x )))
+```
+
+The results are however disappointing. None of the new models (2-10) yields any improvement over the benchmark approach (model 1) of just using the "planned" values as forecast. Out of all the new models, model number 7 gives the best result, but its *loss* of 558,460.40 is still very far away from the benchmark of 301,673.90 from "just using the plan value".
+
+```{r FirstRunResults, include=TRUE, echo=FALSE}
+
+  modelComparison %>% 
+    select( modelId, modelName, firstRunLOSS ) %>% 
+    knitr::kable( tableFormat , caption = "Results from First Modeling Run", 
+                  digits = 2, format.args = list( big.mark = ","))
+
+```
+
+## Second Run
+
+Due to the limited success of the First Run, the model is to be expanded. During Chapter \@ref(project-level-expanses) it was observed that there seems to be a difference in the planning bias for earlier and for later phases of a project, i.e. the planned values for earlier periods seem to be closer to the actual values than the planned values for later periods.
+
+### Regression Tree
+
+```{r splitFunction, echo=FALSE,include=TRUE}
+
+
+    # define id for head and tail as global factors
+    head <- factor(1, levels = 1:2, ordered = TRUE, labels = c("head", "tail"))
+    tail <- factor(2, levels = 1:2, ordered = TRUE, labels = c("head", "tail"))
+    
+    
+    # function to split a dataSet into head and tail section at a standard period
+    splitAtStdPeriod <- function( .dataSet = NULL,
+                                  .breakStdPeriod = NULL) {
+  
+  
+      # only for debugging
+      # .dataSet <- dataSet$training
+      # .breakStdPeriod <- 25
+    
+      # split the supplied data
+      .dataSet %>%
+        
+        unnest( progress ) %>% 
+        
+        # add a factor indicator whether it is head or tail 
+        mutate( branch = ifelse( stdPeriod < .breakStdPeriod, head, tail ) %>% 
+                           factor( levels = 1:2, ordered = TRUE, labels = c("head", "tail") )) %>% 
+        
+        # nest the data back but keep the branches separate
+        nest( progress = -any_of( c( "projectNumber", "projectName", "total", "branch" ))) %>% 
+  
+        # nest according to the two branches
+        nest( subset = -branch) %>% 
+        
+        return()
+      
+    }
+    
+    
+        # function to train a data model separately on both head and tail data
+    trainingOnSplitData <- function( .splitDataSet = NULL ,
+                                     .modelNo ) {
+      
+      # only for debugging
+       # .splitDataSet <- splitAtStdPeriod( dataSet$training,  25)
+       # .modelNo <- 1
+      
+      # train a first model on the head data
+      headModel <- 
+        .splitDataSet %>% 
+        filter( branch == head) %>%
+        select( -branch ) %>% 
+        unnest("subset") %>% 
+        training( .modelNo )  
+      
+      
+      # train a second model on the tail data
+      tailModel <- 
+        .splitDataSet %>% 
+        filter( branch == tail) %>%
+        select( -branch ) %>% 
+        unnest("subset") %>% 
+        training( .modelNo )  
+      
+      
+      # return both models 
+      return( list( headModel = headModel,
+                    tailModel = tailModel ) )
+      
+    }
+  
+  
+    # function to forecat a dataset with a split datamodel for head and tail
+    preditionOnSplitData <- function ( .dataSet = NULL,
+                                       .model = NULL) {
+      
+      # only for debugging
+       # .dataSet <- splitAtStdPeriod( dataSet$training, 25 )
+       # .model <- trainingOnSplitData( splitAtStdPeriod( dataSet$training, 25 ), 1)
+  
+      headPrediction <-
+        .dataSet %>% 
+        filter( branch == head ) %>% 
+        select( -branch ) %>% 
+        unnest( subset ) %>% 
+        prediction( .model = .model$headModel$model )
+        
+      
+      tailPrediction <-
+        .dataSet %>% 
+        filter( branch == tail) %>% 
+        select( -branch ) %>% 
+        unnest( subset ) %>% 
+        prediction( .model = .model$tailModel$model )
+  
+      
+      # return the combined values from head and tail
+      bind_rows( tailPrediction,
+                 headPrediction ) %>% 
+        
+        return()
+      
+    }
+
+```
+
+As an advanced step, a *Regression Tree analysis* is now applied. Hereby the the data is separated into two or more sections and the regression analysis is then applied to each section separately.
+
+To implement this approach, two new functions are introduced:
+
+-   $splitAtStdPeriod$ takes a *data set* and a *breakpoint* as inputs. It then splits all the observations into a "head" part and a "tail" part, according to the breakpoint. An example for 10 randomly selected observations for a $breakpoint$ at 25 is given below:
+
+    ```{r exampleSplit, include=TRUE, echo=FALSE}
+
+      set.seed(10)
+      
+      splitAtStdPeriod ( .dataSet = dataSet$training,
+                         .breakStdPeriod = 25) %>% 
+        unnest(subset) %>% 
+        unnest(progress) %>% 
+        slice_sample( n=10) %>% 
+        select( -starts_with("weight"), -projectName, -description) %>% 
+        knitr::kable( tableFormat , caption = "Examples from Head and Tail split with stdPeriod 25 as Breakpoint", 
+                      digits = 2, format.args = list( big.mark = ","))
+    ```
+
+-   Then there are two other new functions $trainingOnSplitData$ and $preditionOnSplitData$, which perform the same operations than their counterparts from the First Run (see chapter \@ref(training-and-prediction) ), just separately for the *head* and *tail* section.
+
+### Finding the optimal Splitting Point and Results from Second Run
+
+```{r findingTheBestBreakPoint, include=TRUE, echo=FALSE}
+
+    # use the best model 
+    modelNo <- 7
+      
+    
+    # Run a trial an error over the breakpoints 10:90 
+    breakEvaluation <-
+      
+      tibble( 
+              breakPeriod = c(10:90),
+              
+              loss = map_dbl ( breakPeriod, function( breakPeriod ){
+                
+                splitTrainingData <- splitAtStdPeriod( .dataSet = dataSet$training,
+                                                       .breakStdPeriod = breakPeriod )
+                
+                 
+                trainedModel <- trainingOnSplitData( .splitDataSet = splitTrainingData,
+                                                     .modelNo = modelNo)
+              
+                
+                splitTestData <- splitAtStdPeriod( .dataSet = dataSet$testing,
+                                                   .breakStdPeriod = breakPeriod )
+            
+                
+                predictionOnTestData <- preditionOnSplitData ( .dataSet = splitTestData,
+                                                               .model = trainedModel)
+                
+                
+                evaluation( .prediction = predictionOnTestData ) %>% 
+                  pluck("loss")
+                
+              }))
+
+```
+
+Based on the above functions the optimal *breakpoint* can be found via a trial-and-error procedure. The Analysis starts with model 7, since this has previously delivered the best results.
+
+Figure \@ref(fig:plottingSecondRun) plots the results from the trial-and-error run and reveals that the best result is archived with a breakpoint at $stdPeriod$ 56 which results in a LOSS of 554,788.
+
+```{r plottingSecondRun, include=TRUE, echo=FALSE, fig.cap="LOSS from regression tree analysis with model 7 according to different Breakpoints", fig.width=7}
+
+    # Plot the results from the trial an error run
+    breakEvaluation %$% 
+      plot( breakPeriod, loss)
+    
+    
+    # Find the best soultion (i.e. the smallest loss)
+    
+    bestBreakPoint <- breakEvaluation %>% 
+                        slice_min( loss ) 
+    
+
+```
+
+However, this is also a very disappointing result, as it is only a marginal improvement over the first run (558,460.4) and still far away from the benchmark of simply using the planned values (301,673.9).
+
+## Analysis of shortcomings
+
+Figure \@ref(fig:plotSecondRunCompany) reveals that model in the Second Run also suffers from a significant underestimation in nearly all periods.
+
+```{r plotSecondRunCompany, include=TRUE, echo=FALSE, fig.cap="Companylevel plot of of Model 7 during Second Run (Regression Tree with Head and Tail) "}
+
+
+   # Defining the best model from the second run
+    bestModelSecondRun <- 
+      
+      # split the Trainiung Data
+      splitAtStdPeriod( .dataSet = dataSet$training,
+                        .breakStdPeriod = bestBreakPoint$breakPeriod ) %>% 
+      
+      # train the model
+      trainingOnSplitData( .modelNo = modelNo)
+      
+    
+    # Predicting the second run model on company level
+    predictionSecondRun <-
+      
+      # splitt the test data
+      splitAtStdPeriod( .dataSet = dataSet$testing,
+                      .breakStdPeriod = bestBreakPoint$breakPeriod ) %>% 
+      
+      # predict the values
+      preditionOnSplitData( .model = bestModelSecondRun)
+    
+    
+    # Plotting the second run model on company level
+      
+    predictionSecondRun %>% 
+      
+      # Show the graph
+      evaluation() %>% 
+      pluck( 2 ) 
+
+```
+
+Trying to find the reason for this underestimation is revealed by looking at the first 10 observations from the prediction. It shows that 9 out of 10 observations contain $NA$s instead of an planned or forecasted value.
+
+```{r firstTenFromSecondRun, include=TRUE, echo=FALSE}
+
+    predictionSecondRun %>% 
+      slice_head( n=10) %>% 
+      select( -starts_with("weight"), -projectName, -description) %>% 
+      knitr::kable( tableFormat , caption = "First 10 observations from Second Run", 
+                    digits = 2, format.args = list( big.mark = ","))
+ 
+```
+
+This is most likely due to a bug somewhere in the source code. However, due to time limits, the author was not able to fix this bug before the submission deadline.
+
+\newpage
+
+# Conclusion and Suggestion for Future Research
+
+This project has set itself the objective of developing a machine learning approach that helps Finance departments to correct a financial planning bias from a company's operational planning.
+
+To achieve this aim, significant efforts were invested to cleanse and wrangle the extensive data set that was provided from [@Thiele2021].
+
+Afterwards, a data exploration was performed, which showed that there seem to be a reappearing "pattern" on the levels of both *project* and individual *work packages*.
+
+Based on this hypothesis, first a regression analysis with ten different models was performed and since this did not provide convincing results, the model was extended to the advanced model of an regression tree.
+
+However, this also did not provide convincing results and an analysis of the predictions revealed that most likely there are some errors within the code, which unfortunately could not be resolved before the submission date.
+
+Other researches can therefore directly only benefit from the intensive data cleansing work that was applied to the data set, in order to facilitate their own research. Additional benefits might come from the concept of standard Periods and the general outline of the intended machine learning approach.
+
+Future research should therefore first be invested to amend the shortcomings in the $script$, so that the full potential of this research can be revealed.
+
+After that, a deeper analysis into the prediction power of different variables could be worthwhile, e.g. to evaluate whether certain resource types have a higher likelihood of creating a bias than others.
+
+After that, different machine learning algorithms could also be applied. E.g. trying to categorize the work packages according to their resource composition might be a worthwhile approach, since it is the authors experience, that for example supplier cost estimates are much less volatile than labor cost estimates.
+
+Other analysis approaches (e.g. by using different machine learning algorithms) might also be easily possible, due to the very flexible implementation of the script's machine learning functions on [@Thiele2021]'s data set.
+
+\newpage
+
+# References
